@@ -1,0 +1,20 @@
+# Workflow to validate python packages
+
+name: Validate Package
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [master]
+
+jobs:
+  validate:
+    permissions:
+      contents: write
+      id-token: write
+      actions: write
+      statuses: write
+    uses: irvingleonard/reusable-workflows/.github/workflows/python-validate-package.yml@v1
+    with:
+      package-name: ${{ vars.PACKAGE_NAME }}
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
