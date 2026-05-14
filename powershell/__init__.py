@@ -17,6 +17,7 @@ TYPE_MAP = {
 	'System.String': str,
 	'System.String[]': list,
 }
+__version__ = '0.2.0'
 
 
 class PipedCommand(list):
@@ -39,11 +40,11 @@ class PipedCommand(list):
 		"""Initialization
 		Add the initial/unique command line to the list of commands in the pipe list
 
-		:param initial_command_line: The initial command line
+		:param initial_command_line: The initial command line, useful for simple commands
 		:type initial_command_line: str
-		:param input_data: Start by creating feeding the provided data to the first command
+		:param input_data: Start by creating/feeding the provided data to the first command
 		:type input_data: str|object
-		:param output_is_object: Triggers a conversion from JSON
+		:param output_is_object: Triggers a conversion to JSON of the last result
 		:type output_is_object: bool
 		"""
 
