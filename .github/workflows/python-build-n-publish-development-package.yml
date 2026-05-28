@@ -61,7 +61,7 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           key: build-${{ needs.cache-workspace.outputs.cache-hash }}
-          path: ./
+          path: ./**/*
           fail-on-cache-miss: true
 
       - name: Publish package distributions to Test PyPI
