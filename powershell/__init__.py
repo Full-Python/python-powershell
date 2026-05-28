@@ -1,5 +1,5 @@
-"""
-
+"""A convenient way to use PowerShell from Python
+Handle command construction, piping, and execution using subprocess. Uses JSON for input and output data.
 """
 
 from json import dumps as json_dumps, loads as json_loads
