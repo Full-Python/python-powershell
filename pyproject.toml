@@ -3,7 +3,7 @@ requires = ['setuptools', 'wheel', 'simplifiedapp']
 build-backend = 'setuptools.build_meta:__legacy__'
 
 [project]
-name = 'powershell'
+name = 'python-powershell'
 dynamic = ['version', 'description', 'readme']
 requires-python = '>=3.10'
 authors = [
