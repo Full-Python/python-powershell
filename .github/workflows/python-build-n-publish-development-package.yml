@@ -1,0 +1,84 @@
+# This workflow builds and uploads development python artifacts
+
+name: Build and Publish Python Development Package
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  load-constants:
+    uses: Full-Python/.github/.github/workflows/python-constants-development.yml@master
+
+  cache-workspace:
+    needs: load-constants
+    uses: Full-Python/.github/.github/workflows/python-cache-workspace.yml@master
+    permissions:
+      actions: write
+      contents: read
+    with:
+      python-version: ${{ fromJSON(needs.load-constants.outputs.env_json).PYTHON_VERSION }}
+
+  get-tag:
+    needs: [cache-workspace, load-constants]
+    uses: Full-Python/.github/.github/workflows/python-package-get-tag.yml@master
+    permissions:
+      actions: read
+      contents: write
+      statuses: write
+    with:
+      source-hash: ${{ needs.cache-workspace.outputs.cache-hash }}
+      package-name: ${{ vars.PACKAGE_NAME }}
+      tag-regex: ${{ fromJSON(needs.load-constants.outputs.env_json).TAG_REGEX }}
+      workflow: ${{ github.workflow }}
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  build-package:
+    needs: [get-tag, cache-workspace]
+    if: needs.get-tag.outputs.needs-content == 'true'
+    uses: Full-Python/.github/.github/workflows/python-package-build.yml@master
+    permissions:
+      actions: write
+      statuses: write
+    with:
+      source-hash: ${{ needs.cache-workspace.outputs.cache-hash }}
+      workflow: ${{ github.workflow }}
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  github-release:
+    needs: [build-package, get-tag, cache-workspace]
+    if: needs.get-tag.outputs.needs-content == 'true'
+    uses: Full-Python/.github/.github/workflows/python-github-release.yml@master
+    permissions:
+      actions: read
+      contents: write
+    with:
+      source-hash: ${{ needs.cache-workspace.outputs.cache-hash }}
+      stable-version: false
+      tag-name: ${{ needs.get-tag.outputs.git-tag }}
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  pypi-publication:
+    needs: [build-package, get-tag, cache-workspace]
+    if: needs.get-tag.outputs.needs-content == 'true'
+    name: Upload release to Test PyPI
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
+    steps:
+      - name: Restore Workspace
+        uses: actions/cache/restore@v5
+        with:
+          key: build-${{ needs.cache-workspace.outputs.cache-hash }}
+          path: ./dist/**/*
+          fail-on-cache-miss: true
+
+      - name: Publish package distributions to Test PyPI
+        uses: pypa/gh-action-pypi-publish@v1.14.0
+        with:
+          repository-url: https://test.pypi.org/legacy/
