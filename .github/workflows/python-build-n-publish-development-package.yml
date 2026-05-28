@@ -55,7 +55,6 @@ jobs:
     permissions:
       actions: read
       contents: write
-      id-token: write
     steps:
       - name: Restore Workspace
         uses: actions/cache/restore@v5
