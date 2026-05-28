@@ -47,22 +47,8 @@ jobs:
     secrets:
       github-token: ${{ secrets.GITHUB_TOKEN }}
 
-  github-release:
-    needs: [build-package, get-tag, cache-workspace]
-    if: needs.get-tag.outputs.needs-content == 'true'
-    uses: Full-Python/.github/.github/workflows/python-github-release.yml@master
-    permissions:
-      actions: read
-      contents: write
-    with:
-      source-hash: ${{ needs.cache-workspace.outputs.cache-hash }}
-      stable-version: false
-      tag-name: ${{ needs.get-tag.outputs.git-tag }}
-    secrets:
-      github-token: ${{ secrets.GITHUB_TOKEN }}
-
   pypi-publication:
-    needs: [build-package, get-tag, cache-workspace]
+    needs: [ build-package, get-tag, cache-workspace ]
     if: needs.get-tag.outputs.needs-content == 'true'
     name: Upload release to Test PyPI
     runs-on: ubuntu-latest
@@ -82,3 +68,19 @@ jobs:
         uses: pypa/gh-action-pypi-publish@v1.14.0
         with:
           repository-url: https://test.pypi.org/legacy/
+
+  github-release:
+    needs: [build-package, get-tag, cache-workspace, pypi-publication]
+    if: needs.get-tag.outputs.needs-content == 'true'
+    uses: Full-Python/.github/.github/workflows/python-github-release.yml@master
+    permissions:
+      actions: read
+      contents: write
+    with:
+      source-hash: ${{ needs.cache-workspace.outputs.cache-hash }}
+      stable-version: false
+      tag-name: ${{ needs.get-tag.outputs.git-tag }}
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+
+
