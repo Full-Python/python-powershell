@@ -76,6 +76,9 @@ jobs:
         with:
           name: dist-${{ needs.cache-workspace.outputs.cache-hash }}
 
+      - name: Build Package
+        run: echo '`ls -lR`'
+
       - name: Publish package distributions to Test PyPI
         uses: pypa/gh-action-pypi-publish@v1.14.0
         with:
