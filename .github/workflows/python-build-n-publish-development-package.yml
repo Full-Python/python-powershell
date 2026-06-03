@@ -75,6 +75,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: dist-${{ needs.cache-workspace.outputs.cache-hash }}
+          path: ./dist/
 
       - name: Build Package
         run: ls -lR
