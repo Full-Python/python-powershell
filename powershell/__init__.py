@@ -17,7 +17,7 @@ TYPE_MAP = {
 	'System.String': str,
 	'System.String[]': list,
 }
-__version__ = '0.2.0'
+__version__ = '0.2.1.dev0'
 
 
 class PipedCommand(list):
@@ -49,11 +49,7 @@ class PipedCommand(list):
 		"""
 
 		super().__init__()
-		if input_data is not None:
-			if isinstance(input_data, str):
-				self.append(f"'{input_data}'")
-			else:
-				self.extend([f"'{json_dumps(input_data)}'", 'ConvertFrom-Json'])
+		self._input_data = input_data
 		if initial_command_line is not None:
 			self.append(initial_command_line)
 		self._output_is_object = output_is_object
@@ -77,8 +73,7 @@ class PipedCommand(list):
 		:return:
 		"""
 
-		extra_command = ['ConvertTo-Json'] if self._output_is_object else []
-		return ' | '.join(self + extra_command)
+		return ' | '.join(self.full_chain)
 
 	@staticmethod
 	def build_command_line(command, /, **kwargs):
@@ -117,6 +112,26 @@ class PipedCommand(list):
 					result.append(f'-{key} {param_values.pop(key)}')
 
 		return ' '.join(result)
+
+	@property
+	def full_chain(self):
+		"""Return the full command chain
+		Return the list with the input formatting command and output formatting one, if applicable
+
+		return: The input data, the commands on this chain, and the JSON converting command, if applicable.
+		rtype: list
+		"""
+
+		if self._input_data is not None:
+			if isinstance(self._input_data, str):
+				initial_command = [f"'{self._input_data}'"]
+			else:
+				initial_command = [f"'{json_dumps(self._input_data)}'", 'ConvertFrom-Json']
+		else:
+			initial_command = []
+
+		final_command = ['ConvertTo-Json'] if self._output_is_object else []
+		return initial_command + self + final_command
 
 	@classmethod
 	def from_components(cls, command, /, **kwargs):
