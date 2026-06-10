@@ -17,7 +17,7 @@ TYPE_MAP = {
 	'System.String': str,
 	'System.String[]': list,
 }
-__version__ = '0.3.0.dev0'
+__version__ = '0.3.0.dev1'
 
 
 class PipedCommand(list):
@@ -429,6 +429,22 @@ class PowerShell:
 	"""
 	High level interface to PowerShell
 	"""
+
+	def __call__(self, command_string, input_data=None, output_is_object=True, /, **kwargs):
+		"""Callable magic
+		Execute the command described
+
+		:param command_string: the full string of the command to execute
+		:type command_string: str
+		:param input_data: data to feed the command via pipes
+		:type input_data: str|object|None
+		:param output_is_object: selects the format of the output, True for dict, False for str
+		:type output_is_object: bool
+		:return: the result of the command run
+		:rtype: dict|str
+		"""
+
+		return PipedCommand(initial_command_line=command_string, input_data=input_data, output_is_object=output_is_object)(self._runner, **kwargs)
 
 	def __getattr__(self, name):
 		"""Magic attribute resolution
