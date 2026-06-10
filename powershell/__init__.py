@@ -340,6 +340,16 @@ class Modules(dict):
 	Describes the list of modules available in PowerShell
 	"""
 
+	def __contains__(self, name):
+		"""Dict __contains__
+		Override of the builtin dict __contains__ method
+
+		:param name: the name of the module to look for
+		:type name: str
+		"""
+
+		return name in self.modules
+
 	def __getattr__(self, name):
 		"""Magic attribute resolution
 		Lazy calculation of certain attributes
