@@ -17,7 +17,7 @@ TYPE_MAP = {
 	'System.String': str,
 	'System.String[]': list,
 }
-__version__ = '0.2.1.dev0'
+__version__ = '0.3.0.dev0'
 
 
 class PipedCommand(list):
@@ -229,8 +229,8 @@ class Command(dict):
 		cmd |= 'Select-Object -ExpandProperty Parameters'
 
 		result = {}
-		for name, result in cmd(self._runner).items():
-			result[name] = TYPE_MAP.get(result['ParameterType']['FullName'], dict)
+		for name, details in cmd(self._runner).items():
+			result[name] = TYPE_MAP.get(details['ParameterType']['FullName'], dict)
 
 		return result
 
@@ -271,6 +271,13 @@ class Module(dict):
 		super().__init__()
 		self._name = name
 		self._runner = runner
+
+	def __len__(self):
+		"""Dict __len__
+		Override of the builtin dict __len__ method
+		"""
+
+		return len(self.commands)
 
 	def __missing__(self, name):
 		"""Lazy command load
@@ -330,82 +337,107 @@ class Module(dict):
 
 class Modules(dict):
 	"""
-
+	Describes the list of modules available in PowerShell
 	"""
 
-	_already_loaded = False
+	def __getattr__(self, name):
+		"""Magic attribute resolution
+		Lazy calculation of certain attributes
 
-	def __init__(self, runner):
+		:param name: the attribute that is not defined (yet)
+		:type name: str
+		:returns: the value for the attribute
+		:rtype: Any
 		"""
 
-		:param shell:
+		if name == 'modules':
+			value = self._load_modules()
+		else:
+			raise AttributeError(name)
+
+		self.__setattr__(name, value)
+		return value
+
+	def __init__(self, runner):
+		"""Initialization
+		Store the runner callable.
+
+		:param runner: a callable similar to PowerShell.with_subprocess in signature and return format
+		:type runner: callable
 		"""
 
 		super().__init__()
 		self._runner = runner
 
 	def __missing__(self, name):
+		"""Lazy module load
+		Load the named module
+
+		:param name: the name of the module to load
+		:type name: str
+		:return: an instance of Module representing the named command
+		:rtype: Module
 		"""
 
-		:param name:
-		:return:
-		"""
-
-		if self._already_loaded:
+		if name not in self.modules:
 			raise KeyError(name)
 
-		self._load()
-		return self[name]
+		return Module(name, self._runner)
 
-	def _load(self):
+	def _load_modules(self):
+		"""Load modules
+		Imports the list of modules available to the shell
+
+		:return: the list of modules available to the shell
+		:rtype: set
 		"""
 
-		"""
-
-		if self._already_loaded:
-			return False
-
-		cmd = PipedCommand('Get-Module -ListAvailable', output_is_object=True)
-		for result in cmd(self._runner):
-			self[result['Name']] = Module(result['Name'], self._runner)
-
-		self._already_loaded = True
-		return True
+		return {result['Name'] for result in Command(self._runner, 'Get-Module', ListAvailable=None)()}
 
 	def items(self, *args, **kwargs):
+		"""Dict items
+		Override of the builtin dict items method
+
+		:return: a list with the items
+		:rtype: list
 		"""
 
-		"""
-
-		self._load()
-		return super().items(*args, **kwargs)
+		return [(key, self[key]) for key in self.keys()]
 
 	def keys(self):
+		"""Dict keys
+		Override of the builtin dict keys method
+
+		:return: a set with the keys
+		:rtype: set
 		"""
 
-		:return:
-		"""
-
-		self._load()
-		return super().keys()
+		return self.modules
 
 	def values(self):
+		"""Dict values
+		Override of the builtin dict values method
+
+		:return: a list with the values
+		:rtype: list
 		"""
 
-		"""
-
-		self._load()
-		return super().values()
+		return [self[key] for key in self.keys()]
 
 
 class PowerShell:
 	"""
-
+	High level interface to PowerShell
 	"""
 
 	def __getattr__(self, name):
-		"""
+		"""Magic attribute resolution
+		Lazy calculation of certain attributes
 
+		:param name: the attribute that is not defined (yet)
+		:type name: str
+		:returns: the value for the attribute
+		:rtype: Any
 		"""
 
 		if name == 'modules':
@@ -417,19 +449,25 @@ class PowerShell:
 		return value
 
 	def __init__(self, runner=None):
-		"""
+		"""Initialization
+		Store the runner callable.
 
-		:param runner:
+		:param runner: a callable similar to the with_subprocess method in signature and return format. That method is used by default.
+		:type runner: callable|None
 		"""
 
 		self._runner = self.with_subprocess if runner is None else runner
 
 	@staticmethod
 	def with_subprocess(command_string, /, **kwargs):
-		"""
+		"""Run with subprocess
+		Use the subprocess stdlib module to execute the provided command in PowerShell. Return the stdout, stderr, and returncode.
 
-		:param command_string:
-		:return:
+		:param command_string: the command to be run
+		:type command_string: str
+		:param kwargs: extra parameters to pass to subprocess.run
+		:return: the stdout, stderr, and returncode
+		:rtype: tuple
 		"""
 
 		if 'capture_output' not in kwargs:
@@ -439,14 +477,3 @@ class PowerShell:
 
 		result = subprocess_run(('powershell', '-Command', command_string), **kwargs)
 		return result.stdout, result.stderr, result.returncode
-
-def dev_testing():
-	# cmd = Command(PowerShell.with_subprocess, 'Get-AppxPackage', 'Appx')
-	# cmd = Command(PowerShell.with_subprocess, 'Get-Command')
-	module = Module('Appx', PowerShell.with_subprocess)
-	import pprint
-	# pprint.pprint(cmd)
-	# pprint.pprint(cmd())
-	# res =  module._load()
-	# pprint.pprint(module['Get-AppxPackage']())
-	pprint.pprint(module.items())
