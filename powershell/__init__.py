@@ -17,12 +17,17 @@ TYPE_MAP = {
 	'System.String': str,
 	'System.String[]': list,
 }
-__version__ = '0.3.0.dev1'
+__version__ = '0.3.0.dev2'
 
 
 class PipedCommand(list):
 	"""
 	Describes a piped command chain for PowerShell.
+
+	Attributes:
+		- input_data: can be a string or an object (serializable into JSON). It will be added to the front of the chain.
+		- output_is_object: boolean flag that triggers JSON parsing of the output
+		- full_chain: dynamically builds the current command chain as a string
 	"""
 
 	def __call__(self, runner, /, **kwargs):
@@ -40,7 +45,7 @@ class PipedCommand(list):
 		cmd = str(self)
 		LOGGER.warning(f'Executing: {cmd}')
 		stdout, stderr, returncode = runner(cmd, **kwargs)
-		if self._output_is_object:
+		if self.output_is_object:
 			return json_loads(stdout)
 		else:
 			return stdout
@@ -58,10 +63,10 @@ class PipedCommand(list):
 		"""
 
 		super().__init__()
-		self._input_data = input_data
+		self.input_data = input_data
 		if initial_command_line is not None:
 			self.append(initial_command_line)
-		self._output_is_object = output_is_object
+		self.output_is_object = output_is_object
 
 	def __or__(self, next_command):
 		"""Add a command to the pipe list
@@ -127,15 +132,15 @@ class PipedCommand(list):
 		rtype: list
 		"""
 
-		if self._input_data is not None:
-			if isinstance(self._input_data, str):
-				initial_command = [f"'{self._input_data}'"]
+		if self.input_data is not None:
+			if isinstance(self.input_data, str):
+				initial_command = [f"'{self.input_data}'"]
 			else:
-				initial_command = [f"'{json_dumps(self._input_data)}'", 'ConvertFrom-Json']
+				initial_command = [f"'{json_dumps(self.input_data)}'", 'ConvertFrom-Json']
 		else:
 			initial_command = []
 
-		final_command = ['ConvertTo-Json'] if self._output_is_object else []
+		final_command = ['ConvertTo-Json'] if self.output_is_object else []
 		return initial_command + self + final_command
 
 	@classmethod
@@ -145,7 +150,7 @@ class PipedCommand(list):
 
 		:param command: the actual command
 		:type command: str
-		:param kwargs: the values for the switches
+		:param kwargs: command switches and their values
 		:type kwargs: dict
 		:return: a PipedCommand populated with the built command
 		:rtype: PipedCommand
