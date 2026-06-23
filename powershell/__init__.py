@@ -4,7 +4,6 @@ Handle command construction, piping, and execution using subprocess. Uses JSON f
 
 from json import dumps as json_dumps, loads as json_loads
 from logging import getLogger
-from subprocess import run as subprocess_run
 
 
 from .runners import SubprocessRunner
@@ -20,7 +19,7 @@ TYPE_MAP = {
 	'System.String': str,
 	'System.String[]': list,
 }
-__version__ = '0.3.0.dev2'
+__version__ = '0.3.0.dev3'
 
 
 class PipedCommand(list):
