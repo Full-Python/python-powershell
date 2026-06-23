@@ -4,7 +4,9 @@ Handle command construction, piping, and execution using subprocess. Uses JSON f
 
 from json import dumps as json_dumps, loads as json_loads
 from logging import getLogger
-from subprocess import run as subprocess_run
+
+
+from .runners import SubprocessRunner
 
 
 LOGGER = getLogger('__name__')
@@ -17,7 +19,7 @@ TYPE_MAP = {
 	'System.String': str,
 	'System.String[]': list,
 }
-__version__ = '0.3.0.dev2'
+__version__ = '0.3.0.dev3'
 
 
 class PipedCommand(list):
@@ -473,28 +475,8 @@ class PowerShell:
 		"""Initialization
 		Store the runner callable.
 
-		:param runner: a callable similar to the with_subprocess method in signature and return format. That method is used by default.
+		:param runner: a callable similar to the .runners.AbstractRunner interface, or a child of it. Defaults to .runners.SubprocessRunner().
 		:type runner: callable|None
 		"""
 
-		self._runner = self.with_subprocess if runner is None else runner
-
-	@staticmethod
-	def with_subprocess(command_string, /, **kwargs):
-		"""Run with subprocess
-		Use the subprocess stdlib module to execute the provided command in PowerShell. Return the stdout, stderr, and returncode.
-
-		:param command_string: the command to be run
-		:type command_string: str
-		:param kwargs: extra parameters to pass to subprocess.run
-		:return: the stdout, stderr, and returncode
-		:rtype: tuple
-		"""
-
-		if 'capture_output' not in kwargs:
-			kwargs['capture_output'] = True
-		if 'text' not in kwargs:
-			kwargs['text'] = True
-
-		result = subprocess_run(('powershell', '-Command', command_string), **kwargs)
-		return result.stdout, result.stderr, result.returncode
+		self._runner = SubprocessRunner() if runner is None else runner
