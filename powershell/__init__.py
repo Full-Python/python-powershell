@@ -5,7 +5,7 @@ Handle command construction, piping, and execution using subprocess. Uses JSON f
 from json import dumps as json_dumps, loads as json_loads
 from logging import getLogger
 
-from .generic import FullLoadDict
+from .generic import LazyDict, LazyKeyedDict
 from .runners import SubprocessRunner
 
 
@@ -19,7 +19,7 @@ TYPE_MAP = {
 	'System.String': str,
 	'System.String[]': list,
 }
-__version__ = '0.3.0.dev4'
+__version__ = '0.3.0.dev5'
 
 
 class PipedCommand(list):
@@ -159,7 +159,7 @@ class PipedCommand(list):
 		return cls(cls.build_command_line(command, **kwargs))
 
 
-class Command(FullLoadDict):
+class Command(LazyDict):
 	"""
 	Describes a single command in PowerShell
 	"""
@@ -173,7 +173,7 @@ class Command(FullLoadDict):
 		:param output_is_object: selects the format of the output, True for dict, False for str
 		:type output_is_object: bool
 		:param kwargs: switches and values for the command
-		:type kwargs: dict
+		:type kwargs: Any
 		:return: the result of the command run
 		:rtype: dict|str
 		"""
@@ -222,30 +222,12 @@ class Command(FullLoadDict):
 		return result
 
 
-class Module(dict):
+class Module(LazyKeyedDict):
 	"""
 	Describes a single module in PowerShell
 	"""
 
-	def __getattr__(self, name):
-		"""Magic attribute resolution
-		Lazy calculation of certain attributes
-
-		:param name: the attribute that is not defined (yet)
-		:type name: str
-		:returns: the value for the attribute
-		:rtype: Any
-		"""
-
-		if name == 'commands':
-			value = self._load_commands()
-		else:
-			raise AttributeError(name)
-
-		self.__setattr__(name, value)
-		return value
-
-	def __init__(self, name, runner):
+	def __init__(self, runner, name):
 		"""Initialization
 		Store the module and runner callable.
 
@@ -259,91 +241,33 @@ class Module(dict):
 		self._name = name
 		self._runner = runner
 
-	def __len__(self):
-		"""Dict __len__
-		Override of the builtin dict __len__ method
-		"""
-
-		return len(self.commands)
-
-	def __missing__(self, name):
-		"""Lazy command load
-		Load the named command
-
-		:param name: the command name to load
-		:type name: str
-		:return: an instance of Command representing the named command
-		:rtype: Command
-		"""
-
-		if name not in self.commands:
-			raise KeyError(name)
-
-		return Command(self._runner, name, self._name)
-
-	def _load_commands(self):
+	def _load_keys(self):
 		"""Load commands
-		Imports the list of commands available in the module
+		Retrieves the list of commands available in the module
 
 		:return: the list of commands available in the module
 		:rtype: set
 		"""
 
-		return {result['Name'] for result in Command(self._runner, 'Get-Command', Module=self._name)()}
+		return {result['Name'] for result in Command(self._runner, 'Get-Command')(Module=self._name)}
 
-	def items(self, *args, **kwargs):
-		"""Dict items
-		Override of the builtin dict items method
+	def _load_value(self, name):
+		"""Load value
+		Return an instance of Command representing the named command
 
-		:return: a list with the items
-		:rtype: list
+		:param name: the name of the command to load
+		:type name: str
+		:return: an instance of Command representing the named command
+		:rtype: Command
 		"""
 
-		return [(key, self[key]) for key in self.keys()]
-
-	def keys(self):
-		"""Dict keys
-		Override of the builtin dict keys method
-
-		:return: a set with the keys
-		:rtype: set
-		"""
-
-		return self.commands
-
-	def values(self):
-		"""Dict values
-		Override of the builtin dict values method
-
-		:return: a list with the values
-		:rtype: list
-		"""
-
-		return [self[key] for key in self.keys()]
+		return Command(self._runner, name, self._name)
 
 
-class Modules(dict):
+class Modules(LazyKeyedDict):
 	"""
 	Describes the list of modules available in PowerShell
 	"""
-
-	def __getattr__(self, name):
-		"""Magic attribute resolution
-		Lazy calculation of certain attributes
-
-		:param name: the attribute that is not defined (yet)
-		:type name: str
-		:returns: the value for the attribute
-		:rtype: Any
-		"""
-
-		if name == 'modules':
-			value = self._load_modules()
-		else:
-			raise AttributeError(name)
-
-		self.__setattr__(name, value)
-		return value
 
 	def __init__(self, runner):
 		"""Initialization
@@ -356,22 +280,7 @@ class Modules(dict):
 		super().__init__()
 		self._runner = runner
 
-	def __missing__(self, name):
-		"""Lazy module load
-		Load the named module
-
-		:param name: the name of the module to load
-		:type name: str
-		:return: an instance of Module representing the named command
-		:rtype: Module
-		"""
-
-		if name not in self.modules:
-			raise KeyError(name)
-
-		return Module(name, self._runner)
-
-	def _load_modules(self):
+	def _load_keys(self):
 		"""Load modules
 		Imports the list of modules available to the shell
 
@@ -379,37 +288,19 @@ class Modules(dict):
 		:rtype: set
 		"""
 
-		return {result['Name'] for result in Command(self._runner, 'Get-Module', ListAvailable=None)()}
+		return {result['Name'] for result in Command(self._runner, 'Get-Module')(ListAvailable=None)}
 
-	def items(self, *args, **kwargs):
-		"""Dict items
-		Override of the builtin dict items method
+	def _load_value(self, name):
+		"""Load value
+		Return an instance of Module representing the named module
 
-		:return: a list with the items
-		:rtype: list
+		:param name: the name of the module to load
+		:type name: str
+		:return: an instance of Module representing the named module
+		:rtype: Module
 		"""
 
-		return [(key, self[key]) for key in self.keys()]
-
-	def keys(self):
-		"""Dict keys
-		Override of the builtin dict keys method
-
-		:return: a set with the keys
-		:rtype: set
-		"""
-
-		return self.modules
-
-	def values(self):
-		"""Dict values
-		Override of the builtin dict values method
-
-		:return: a list with the values
-		:rtype: list
-		"""
-
-		return [self[key] for key in self.keys()]
+		return Module(self._runner, name)
 
 
 class PowerShell:
