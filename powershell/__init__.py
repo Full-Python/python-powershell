@@ -151,7 +151,7 @@ class PipedCommand(list):
 		:param command: the actual command
 		:type command: str
 		:param kwargs: command switches and their values
-		:type kwargs: dict
+		:type kwargs: Any
 		:return: a PipedCommand populated with the built command
 		:rtype: PipedCommand
 		"""
@@ -211,8 +211,7 @@ class Command(LazyDict):
 		params = {'Name': self._name}
 		if self._module is not None:
 			params['Module'] = self._module
-		cmd = PipedCommand.build_command_line('Get-Command', **params)
-		cmd = PipedCommand(cmd, output_is_object=True)
+		cmd = PipedCommand.from_components('Get-Command', **params)
 		cmd |= 'Select-Object -ExpandProperty Parameters'
 
 		result = {}
@@ -249,7 +248,7 @@ class Module(LazyKeyedDict):
 		:rtype: set
 		"""
 
-		return {result['Name'] for result in Command(self._runner, 'Get-Command')(Module=self._name)}
+		return {result['Name'] for result in PipedCommand.from_components('Get-Command', Module=self._name)(runner=self._runner)}
 
 	def _load_value(self, name):
 		"""Load value
@@ -288,7 +287,7 @@ class Modules(LazyKeyedDict):
 		:rtype: set
 		"""
 
-		return {result['Name'] for result in Command(self._runner, 'Get-Module')(ListAvailable=None)}
+		return {result['Name'] for result in PipedCommand.from_components('Get-Module', ListAvailable=None)(runner=self._runner)}
 
 	def _load_value(self, name):
 		"""Load value
@@ -308,21 +307,26 @@ class PowerShell:
 	High level interface to PowerShell
 	"""
 
-	def __call__(self, command_string, input_data=None, output_is_object=True, /, **kwargs):
+	def __call__(self, command, module=None, input_data=None, output_is_object=True, /, **kwargs):
 		"""Callable magic
 		Execute the command described
 
-		:param command_string: the full string of the command to execute
-		:type command_string: str
+		:param command: the name of the command to execute
+		:type command: str
+		:param module: the name of the module containing the command
+		:type module: str
 		:param input_data: data to feed the command via pipes
 		:type input_data: str|object|None
 		:param output_is_object: selects the format of the output, True for dict, False for str
 		:type output_is_object: bool
+		:param kwargs: switches and values for the command
+		:type kwargs: Any
 		:return: the result of the command run
 		:rtype: dict|str
 		"""
 
-		return PipedCommand(initial_command_line=command_string, input_data=input_data, output_is_object=output_is_object)(self._runner, **kwargs)
+		cmd = Command(runner=self._runner, name=command, module=module)
+		return cmd(input_data, output_is_object, **kwargs)
 
 	def __getattr__(self, name):
 		"""Magic attribute resolution
@@ -351,3 +355,19 @@ class PowerShell:
 		"""
 
 		self._runner = SubprocessRunner() if runner is None else runner
+
+	def run_string(self, command_string, input_data=None, output_is_object=True):
+		"""Execute string
+		Execute the command described in the string. Similar to the call magic method but with plain string instead of structured data.
+
+		:param command_string: the full string of the command to execute
+		:type command_string: str
+		:param input_data: data to feed the command via pipes
+		:type input_data: str|object|None
+		:param output_is_object: selects the format of the output, True for dict, False for str
+		:type output_is_object: bool
+		:return: the result of the command run
+		:rtype: dict|str
+		"""
+
+		return PipedCommand(initial_command_line=command_string, input_data=input_data, output_is_object=output_is_object)(runner=self._runner)
