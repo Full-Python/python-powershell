@@ -5,7 +5,7 @@ Handle command construction, piping, and execution using subprocess. Uses JSON f
 from json import dumps as json_dumps, loads as json_loads
 from logging import getLogger
 
-
+from .generic import FullLoadDict
 from .runners import SubprocessRunner
 
 
@@ -19,7 +19,7 @@ TYPE_MAP = {
 	'System.String': str,
 	'System.String[]': list,
 }
-__version__ = '0.3.0.dev3'
+__version__ = '0.3.0.dev4'
 
 
 class PipedCommand(list):
@@ -32,21 +32,19 @@ class PipedCommand(list):
 		- full_chain: dynamically builds the current command chain as a string
 	"""
 
-	def __call__(self, runner, /, **kwargs):
+	def __call__(self, runner):
 		"""Callable magic
 		Execute the command described
 
-		:param runner: a callable that should take the command as a string as the first parameter and then any number of keyword parameters, execute the command in PowerShell and return a tuple of (stdout, stderr, returncode).
+		:param runner: a callable similar to the .runners.AbstractRunner interface, or a child of it.
 		:type runner: callable
-		:param kwargs: extra parameters for the runner
-		:type kwargs: dict
 		:return: The result of the command as an object (dict) or string depending on the output_is_object init parameter
 		:rtype: dict | str
 		"""
 
 		cmd = str(self)
 		LOGGER.warning(f'Executing: {cmd}')
-		stdout, stderr, returncode = runner(cmd, **kwargs)
+		stdout, stderr, returncode = runner(cmd)
 		if self.output_is_object:
 			return json_loads(stdout)
 		else:
@@ -161,7 +159,7 @@ class PipedCommand(list):
 		return cls(cls.build_command_line(command, **kwargs))
 
 
-class Command(dict):
+class Command(FullLoadDict):
 	"""
 	Describes a single command in PowerShell
 	"""
@@ -174,40 +172,22 @@ class Command(dict):
 		:type input_data: str|object|None
 		:param output_is_object: selects the format of the output, True for dict, False for str
 		:type output_is_object: bool
-		:param kwargs: extra parameters for the runner
+		:param kwargs: switches and values for the command
 		:type kwargs: dict
 		:return: the result of the command run
 		:rtype: dict|str
 		"""
 
 		cmd = self._name if self._module is None else f'{self._module}\\{self._name}'
-		cmd = PipedCommand.build_command_line(cmd, self.parameters, **self)
+		cmd = PipedCommand.build_command_line(cmd, self, **kwargs)
 		cmd = PipedCommand(cmd, input_data=input_data, output_is_object=output_is_object)
-		return cmd(self._runner, **kwargs)
+		return cmd(self._runner)
 
-	def __getattr__(self, name):
-		"""Magic attribute resolution
-		Lazy calculation of certain attributes
-
-		:param name: the attribute that is not defined (yet)
-		:type name: str
-		:returns: the value for the attribute
-		:rtype: Any
-		"""
-
-		if name == 'parameters':
-			value = self._load_parameters()
-		else:
-			raise AttributeError(name)
-
-		self.__setattr__(name, value)
-		return value
-
-	def __init__(self, runner, name, module=None, /, **kwargs):
+	def __init__(self, runner, name, module=None):
 		"""Initialization
 		Store the module, command name, and runner callable.
 
-		:param runner: a callable similar to PowerShell.with_subprocess in signature and return format
+		:param runner: a callable similar to the .runners.AbstractRunner interface, or a child of it.
 		:type runner: callable
 		:param name: the actual command
 		:type name: str
@@ -215,12 +195,12 @@ class Command(dict):
 		:type module: str|None
 		"""
 
-		super().__init__(kwargs)
+		super().__init__()
 		self._runner = runner
 		self._name = name
 		self._module = module
 
-	def _load_parameters(self):
+	def _load_dict(self):
 		"""Load parameters
 		Parses the definition of the command and compiles a list of all possible switches and the expected types.
 
