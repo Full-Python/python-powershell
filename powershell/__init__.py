@@ -4,7 +4,9 @@ Handle command construction, piping, and execution using subprocess. Uses JSON f
 
 from json import dumps as json_dumps, loads as json_loads
 from logging import getLogger
-from subprocess import run as subprocess_run
+
+from .generic import LazyDict, LazyKeyedDict
+from .runners import SubprocessRunner
 
 
 LOGGER = getLogger('__name__')
@@ -17,24 +19,36 @@ TYPE_MAP = {
 	'System.String': str,
 	'System.String[]': list,
 }
-__version__ = '0.2.0'
+__version__ = '0.3.0'
 
 
 class PipedCommand(list):
 	"""
 	Describes a piped command chain for PowerShell.
+
+	Attributes:
+		- input_data: can be a string or an object (serializable into JSON). It will be added to the front of the chain.
+		- output_is_object: boolean flag that triggers JSON parsing of the output
+		- full_chain: dynamically builds the current command chain as a string
 	"""
 
-	def __call__(self, runner, /, **kwargs):
+	def __call__(self, runner):
+		"""Callable magic
+		Execute the command described
+
+		:param runner: a callable similar to the .runners.AbstractRunner interface, or a child of it.
+		:type runner: callable
+		:return: The result of the command as an object (dict) or string depending on the output_is_object init parameter
+		:rtype: dict | str
 		"""
 
-		"""
-
-		result = runner(str(self), **kwargs)
-		if self._output_is_object:
-			return json_loads(result.stdout)
+		cmd = str(self)
+		LOGGER.warning(f'Executing: {cmd}')
+		stdout, stderr, returncode = runner(cmd)
+		if self.output_is_object:
+			return json_loads(stdout)
 		else:
-			return result.stdout
+			return stdout
 
 	def __init__(self, initial_command_line=None, input_data=None, output_is_object=True):
 		"""Initialization
@@ -43,20 +57,16 @@ class PipedCommand(list):
 		:param initial_command_line: The initial command line, useful for simple commands
 		:type initial_command_line: str
 		:param input_data: Start by creating/feeding the provided data to the first command
-		:type input_data: str|object
+		:type input_data: str|object|None
 		:param output_is_object: Triggers a conversion to JSON of the last result
 		:type output_is_object: bool
 		"""
 
 		super().__init__()
-		if input_data is not None:
-			if isinstance(input_data, str):
-				self.append(f"'{input_data}'")
-			else:
-				self.extend([f"'{json_dumps(input_data)}'", 'ConvertFrom-Json'])
+		self.input_data = input_data
 		if initial_command_line is not None:
 			self.append(initial_command_line)
-		self._output_is_object = output_is_object
+		self.output_is_object = output_is_object
 
 	def __or__(self, next_command):
 		"""Add a command to the pipe list
@@ -72,329 +82,260 @@ class PipedCommand(list):
 		return self
 
 	def __str__(self):
+		"""Magic string representation
+		The string representation of the current command chain.
+
+		:return: the string representation of the current command chain
+		:rtype: str
 		"""
 
-		:return:
-		"""
-
-		extra_command = ['ConvertTo-Json'] if self._output_is_object else []
-		return ' | '.join(self + extra_command)
+		return ' | '.join(self.full_chain)
 
 	@staticmethod
-	def build_command_line(command, /, **kwargs):
-		"""
+	def build_command_line(command, parameters_definition=None, /, **parameters_values):
+		"""Build command line
+		Create a command line with the parameters provided. Starts with the command value and add switches to it based on the parameters_values.
 
-		:param command:
-		:param kwargs:
-		:return:
+		:param command: the actual "command"
+		:type command: str
+		:param parameters_definition: the valid switches supported by the command
+		:type parameters_definition: dict
+		:param parameters_values: the values for the switches
+		:type parameters_values: dict
+		:return: the command with all the switches added
+		:rtype: str
 		"""
 
 		result = [command]
-		for key, value in kwargs.items():
-			if value is None:
-				result.append(f'-{key}')
-			else:
-				result.append(f'-{key} {value}')
-
-		return ' '.join(result)
-
-	@staticmethod
-	def build_command_line_v2(command, param_def={}, /, **param_values):
-		"""
-
-		:param command:
-		:param param_def:
-		:param param_values:
-		:return:
-		"""
-
-		result = [command]
-		for key, type_ in param_def.items():
-			if key in param_values:
-				if type_ is None:
+		if parameters_definition is None:
+			for key, value in parameters_values.items():
+				if value is None:
 					result.append(f'-{key}')
 				else:
-					result.append(f'-{key} {param_values.pop(key)}')
+					result.append(f'-{key} {value}')
+		else:
+			for key, type_ in parameters_definition.items():
+				if key in parameters_values:
+					if type_ is None:
+						result.append(f'-{key}')
+					else:
+						result.append(f'-{key} {parameters_values.pop(key)}')
 
 		return ' '.join(result)
+
+	@property
+	def full_chain(self):
+		"""Return the full command chain
+		Return the list with the input formatting command and output formatting one, if applicable.
+
+		return: The input data, the commands on this chain, and the JSON converting command, if applicable.
+		rtype: list
+		"""
+
+		if self.input_data is not None:
+			if isinstance(self.input_data, str):
+				initial_command = [f"'{self.input_data}'"]
+			else:
+				initial_command = [f"'{json_dumps(self.input_data)}'", 'ConvertFrom-Json']
+		else:
+			initial_command = []
+
+		final_command = ['ConvertTo-Json'] if self.output_is_object else []
+		return initial_command + self + final_command
 
 	@classmethod
 	def from_components(cls, command, /, **kwargs):
-		"""
+		"""Helper constructor from components
+		Builds a chain with a single command from the components.
 
-		:param command:
-		:param kwargs:
-		:return:
+		:param command: the actual command
+		:type command: str
+		:param kwargs: command switches and their values
+		:type kwargs: Any
+		:return: a PipedCommand populated with the built command
+		:rtype: PipedCommand
 		"""
 
 		return cls(cls.build_command_line(command, **kwargs))
 
 
-class Command(dict):
+class Command(LazyDict):
+	"""
+	Describes a single command in PowerShell
 	"""
 
-	"""
+	def __call__(self, input_data=None, output_is_object=True, /, **kwargs):
+		"""Callable magic
+		Build the command with the currently registered switches, run it, and return the result.
 
-	_already_loaded = False
-
-	def __call__(self, input_data=None, /, *args, **kwargs):
+		:param input_data: data to feed the command via pipes
+		:type input_data: str|object|None
+		:param output_is_object: selects the format of the output, True for dict, False for str
+		:type output_is_object: bool
+		:param kwargs: switches and values for the command
+		:type kwargs: Any
+		:return: the result of the command run
+		:rtype: dict|str
 		"""
 
-		"""
-
-		cmd = f'{self._module}\\{self._name}'
-		cmd = PipedCommand.build_command_line_v2(cmd, self, **kwargs)
-		cmd = PipedCommand(cmd, input_data=input_data)
+		cmd = self._name if self._module is None else f'{self._module}\\{self._name}'
+		cmd = PipedCommand.build_command_line(cmd, self, **kwargs)
+		cmd = PipedCommand(cmd, input_data=input_data, output_is_object=output_is_object)
 		return cmd(self._runner)
 
-	def __init__(self, module, name, runner):
-		"""
+	def __init__(self, runner, name, module=None):
+		"""Initialization
+		Store the module, command name, and runner callable.
 
-		:param module:
-		:type module:
-		:param name:
-		:type name:
-		:param runner:
-		:type runner:
+		:param runner: a callable similar to the .runners.AbstractRunner interface, or a child of it.
+		:type runner: callable
+		:param name: the actual command
+		:type name: str
+		:param module: the module containing the command
+		:type module: str|None
 		"""
 
 		super().__init__()
+		self._runner = runner
+		self._name = name
 		self._module = module
-		self._name = name
-		self._runner = runner
 
-	def __iter__(self):
+	def _load_dict(self):
+		"""Load parameters
+		Parses the definition of the command and compiles a list of all possible switches and the expected types.
+
+		:return: the parameters for the command
+		:rtype: dict
 		"""
 
-		"""
-
-		self._load()
-		return super().__iter__()
-
-	def __getitem__(self, item):
-		"""
-		
-		"""
-		
-		self._load()
-		return super().__getitem__(item)
-
-	def __len__(self):
-		"""
-
-		"""
-
-		self._load()
-		return super().__len__()
-
-	def __missing__(self, name):
-		"""
-
-		:param name:
-		:return:
-		"""
-
-		if self._already_loaded:
-			raise KeyError(name)
-
-		self._load()
-		return self[name]
-
-	def _load(self):
-		"""
-
-		"""
-
-		if self._already_loaded:
-			return False
-
-		cmd = PipedCommand(f'Get-Command -Module {self._module} -Name {self._name}', output_is_object=True)
+		params = {'Name': self._name}
+		if self._module is not None:
+			params['Module'] = self._module
+		cmd = PipedCommand.from_components('Get-Command', **params)
 		cmd |= 'Select-Object -ExpandProperty Parameters'
-		for name, result in cmd(self._runner).items():
-			# self[name] = result['ParameterType']['FullName']
-			self[name] = TYPE_MAP.get(result['ParameterType']['FullName'], dict)
 
-		self._already_loaded = True
-		return True
+		result = {}
+		for name, details in cmd(self._runner).items():
+			result[name] = TYPE_MAP.get(details['ParameterType']['FullName'], dict)
 
-	def items(self, *args, **kwargs):
-		"""
-
-		"""
-
-		self._load()
-		return super().items(*args, **kwargs)
-
-	def keys(self):
-		"""
-
-		:return:
-		"""
-
-		self._load()
-		return super().keys()
-
-	def values(self):
-		"""
-
-		"""
-
-		self._load()
-		return super().values()
+		return result
 
 
-class Module(dict):
+class Module(LazyKeyedDict):
+	"""
+	Describes a single module in PowerShell
 	"""
 
-	"""
+	def __init__(self, runner, name):
+		"""Initialization
+		Store the module and runner callable.
 
-	_already_loaded = False
-
-	def __init__(self, name, runner):
-		"""
-
-		:param name:
-		:type name:
-		:param runner:
-		:type runner:
+		:param name: the module name
+		:type name: str
+		:param runner: a callable similar to PowerShell.with_subprocess in signature and return format
+		:type runner: callable
 		"""
 
 		super().__init__()
 		self._name = name
 		self._runner = runner
 
-	def __missing__(self, name):
+	def _load_keys(self):
+		"""Load commands
+		Retrieves the list of commands available in the module
+
+		:return: the list of commands available in the module
+		:rtype: set
 		"""
 
-		:param name:
-		:return:
+		return {result['Name'] for result in PipedCommand.from_components('Get-Command', Module=self._name)(runner=self._runner)}
+
+	def _load_value(self, name):
+		"""Load value
+		Return an instance of Command representing the named command
+
+		:param name: the name of the command to load
+		:type name: str
+		:return: an instance of Command representing the named command
+		:rtype: Command
 		"""
 
-		if self._already_loaded:
-			raise KeyError(name)
-
-		self._load()
-		return self[name]
-
-	def _load(self):
-		"""
-
-		"""
-
-		if self._already_loaded:
-			return False
-
-		cmd = PipedCommand(f'Get-Command -Module {self._name}', output_is_object=True)
-		for result in cmd(self._runner):
-			self[result['Name']] = Command(self._name, result['Name'], self._runner)
-
-		self._already_loaded = True
-		return True
-
-	def items(self, *args, **kwargs):
-		"""
-
-		"""
-
-		self._load()
-		return super().items(*args, **kwargs)
-
-	def keys(self):
-		"""
-
-		:return:
-		"""
-
-		self._load()
-		return super().keys()
-
-	def values(self):
-		"""
-
-		"""
-
-		self._load()
-		return super().values()
+		return Command(self._runner, name, self._name)
 
 
-class Modules(dict):
+class Modules(LazyKeyedDict):
 	"""
-
+	Describes the list of modules available in PowerShell
 	"""
-
-	_already_loaded = False
 
 	def __init__(self, runner):
-		"""
+		"""Initialization
+		Store the runner callable.
 
-		:param shell:
+		:param runner: a callable similar to PowerShell.with_subprocess in signature and return format
+		:type runner: callable
 		"""
 
 		super().__init__()
 		self._runner = runner
 
-	def __missing__(self, name):
+	def _load_keys(self):
+		"""Load modules
+		Imports the list of modules available to the shell
+
+		:return: the list of modules available to the shell
+		:rtype: set
 		"""
 
-		:param name:
-		:return:
+		return {result['Name'] for result in PipedCommand.from_components('Get-Module', ListAvailable=None)(runner=self._runner)}
+
+	def _load_value(self, name):
+		"""Load value
+		Return an instance of Module representing the named module
+
+		:param name: the name of the module to load
+		:type name: str
+		:return: an instance of Module representing the named module
+		:rtype: Module
 		"""
 
-		if self._already_loaded:
-			raise KeyError(name)
-
-		self._load()
-		return self[name]
-
-	def _load(self):
-		"""
-
-		"""
-
-		if self._already_loaded:
-			return False
-
-		cmd = PipedCommand('Get-Module -ListAvailable', output_is_object=True)
-		for result in cmd(self._runner):
-			self[result['Name']] = Module(result['Name'], self._runner)
-
-		self._already_loaded = True
-		return True
-
-	def items(self, *args, **kwargs):
-		"""
-
-		"""
-
-		self._load()
-		return super().items(*args, **kwargs)
-
-	def keys(self):
-		"""
-
-		:return:
-		"""
-
-		self._load()
-		return super().keys()
-
-	def values(self):
-		"""
-
-		"""
-
-		self._load()
-		return super().values()
+		return Module(self._runner, name)
 
 
 class PowerShell:
 	"""
-
+	High level interface to PowerShell
 	"""
 
-	def __getattr__(self, name):
+	def __call__(self, command, module=None, input_data=None, output_is_object=True, /, **kwargs):
+		"""Callable magic
+		Execute the command described
+
+		:param command: the name of the command to execute
+		:type command: str
+		:param module: the name of the module containing the command
+		:type module: str
+		:param input_data: data to feed the command via pipes
+		:type input_data: str|object|None
+		:param output_is_object: selects the format of the output, True for dict, False for str
+		:type output_is_object: bool
+		:param kwargs: switches and values for the command
+		:type kwargs: Any
+		:return: the result of the command run
+		:rtype: dict|str
 		"""
 
+		cmd = Command(runner=self._runner, name=command, module=module)
+		return cmd(input_data, output_is_object, **kwargs)
+
+	def __getattr__(self, name):
+		"""Magic attribute resolution
+		Lazy calculation of certain attributes
+
+		:param name: the attribute that is not defined (yet)
+		:type name: str
+		:returns: the value for the attribute
+		:rtype: Any
 		"""
 
 		if name == 'modules':
@@ -406,24 +347,27 @@ class PowerShell:
 		return value
 
 	def __init__(self, runner=None):
+		"""Initialization
+		Store the runner callable.
+
+		:param runner: a callable similar to the .runners.AbstractRunner interface, or a child of it. Defaults to .runners.SubprocessRunner().
+		:type runner: callable|None
 		"""
 
-		:param runner:
+		self._runner = SubprocessRunner() if runner is None else runner
+
+	def run_string(self, command_string, input_data=None, output_is_object=True):
+		"""Execute string
+		Execute the command described in the string. Similar to the call magic method but with plain string instead of structured data.
+
+		:param command_string: the full string of the command to execute
+		:type command_string: str
+		:param input_data: data to feed the command via pipes
+		:type input_data: str|object|None
+		:param output_is_object: selects the format of the output, True for dict, False for str
+		:type output_is_object: bool
+		:return: the result of the command run
+		:rtype: dict|str
 		"""
 
-		self._runner = self.with_subprocess if runner is None else runner
-
-	@staticmethod
-	def with_subprocess(command_string, /, **kwargs):
-		"""
-
-		:param command_string:
-		:return:
-		"""
-
-		if 'capture_output' not in kwargs:
-			kwargs['capture_output'] = True
-		if 'text' not in kwargs:
-			kwargs['text'] = True
-
-		return subprocess_run(('powershell', '-Command', command_string), **kwargs)
+		return PipedCommand(initial_command_line=command_string, input_data=input_data, output_is_object=output_is_object)(runner=self._runner)
