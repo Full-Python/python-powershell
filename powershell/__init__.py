@@ -4,7 +4,9 @@ Handle command construction, piping, and execution using subprocess. Uses JSON f
 
 from json import dumps as json_dumps, loads as json_loads
 from logging import getLogger
-from subprocess import run as subprocess_run
+
+from .generic import LazyDict, LazyKeyedDict
+from .runners import SubprocessRunner
 
 
 LOGGER = getLogger('__name__')
@@ -17,30 +19,33 @@ TYPE_MAP = {
 	'System.String': str,
 	'System.String[]': list,
 }
-__version__ = '0.3.0.dev1'
+__version__ = '0.3.0.dev6'
 
 
 class PipedCommand(list):
 	"""
 	Describes a piped command chain for PowerShell.
+
+	Attributes:
+		- input_data: can be a string or an object (serializable into JSON). It will be added to the front of the chain.
+		- output_is_object: boolean flag that triggers JSON parsing of the output
+		- full_chain: dynamically builds the current command chain as a string
 	"""
 
-	def __call__(self, runner, /, **kwargs):
+	def __call__(self, runner):
 		"""Callable magic
 		Execute the command described
 
-		:param runner: a callable that should take the command as a string as the first parameter and then any number of keyword parameters, execute the command in PowerShell and return a tuple of (stdout, stderr, returncode).
+		:param runner: a callable similar to the .runners.AbstractRunner interface, or a child of it.
 		:type runner: callable
-		:param kwargs: extra parameters for the runner
-		:type kwargs: dict
 		:return: The result of the command as an object (dict) or string depending on the output_is_object init parameter
 		:rtype: dict | str
 		"""
 
 		cmd = str(self)
 		LOGGER.warning(f'Executing: {cmd}')
-		stdout, stderr, returncode = runner(cmd, **kwargs)
-		if self._output_is_object:
+		stdout, stderr, returncode = runner(cmd)
+		if self.output_is_object:
 			return json_loads(stdout)
 		else:
 			return stdout
@@ -58,10 +63,10 @@ class PipedCommand(list):
 		"""
 
 		super().__init__()
-		self._input_data = input_data
+		self.input_data = input_data
 		if initial_command_line is not None:
 			self.append(initial_command_line)
-		self._output_is_object = output_is_object
+		self.output_is_object = output_is_object
 
 	def __or__(self, next_command):
 		"""Add a command to the pipe list
@@ -127,15 +132,15 @@ class PipedCommand(list):
 		rtype: list
 		"""
 
-		if self._input_data is not None:
-			if isinstance(self._input_data, str):
-				initial_command = [f"'{self._input_data}'"]
+		if self.input_data is not None:
+			if isinstance(self.input_data, str):
+				initial_command = [f"'{self.input_data}'"]
 			else:
-				initial_command = [f"'{json_dumps(self._input_data)}'", 'ConvertFrom-Json']
+				initial_command = [f"'{json_dumps(self.input_data)}'", 'ConvertFrom-Json']
 		else:
 			initial_command = []
 
-		final_command = ['ConvertTo-Json'] if self._output_is_object else []
+		final_command = ['ConvertTo-Json'] if self.output_is_object else []
 		return initial_command + self + final_command
 
 	@classmethod
@@ -145,8 +150,8 @@ class PipedCommand(list):
 
 		:param command: the actual command
 		:type command: str
-		:param kwargs: the values for the switches
-		:type kwargs: dict
+		:param kwargs: command switches and their values
+		:type kwargs: Any
 		:return: a PipedCommand populated with the built command
 		:rtype: PipedCommand
 		"""
@@ -154,7 +159,7 @@ class PipedCommand(list):
 		return cls(cls.build_command_line(command, **kwargs))
 
 
-class Command(dict):
+class Command(LazyDict):
 	"""
 	Describes a single command in PowerShell
 	"""
@@ -167,40 +172,22 @@ class Command(dict):
 		:type input_data: str|object|None
 		:param output_is_object: selects the format of the output, True for dict, False for str
 		:type output_is_object: bool
-		:param kwargs: extra parameters for the runner
-		:type kwargs: dict
+		:param kwargs: switches and values for the command
+		:type kwargs: Any
 		:return: the result of the command run
 		:rtype: dict|str
 		"""
 
 		cmd = self._name if self._module is None else f'{self._module}\\{self._name}'
-		cmd = PipedCommand.build_command_line(cmd, self.parameters, **self)
+		cmd = PipedCommand.build_command_line(cmd, self, **kwargs)
 		cmd = PipedCommand(cmd, input_data=input_data, output_is_object=output_is_object)
-		return cmd(self._runner, **kwargs)
+		return cmd(self._runner)
 
-	def __getattr__(self, name):
-		"""Magic attribute resolution
-		Lazy calculation of certain attributes
-
-		:param name: the attribute that is not defined (yet)
-		:type name: str
-		:returns: the value for the attribute
-		:rtype: Any
-		"""
-
-		if name == 'parameters':
-			value = self._load_parameters()
-		else:
-			raise AttributeError(name)
-
-		self.__setattr__(name, value)
-		return value
-
-	def __init__(self, runner, name, module=None, /, **kwargs):
+	def __init__(self, runner, name, module=None):
 		"""Initialization
 		Store the module, command name, and runner callable.
 
-		:param runner: a callable similar to PowerShell.with_subprocess in signature and return format
+		:param runner: a callable similar to the .runners.AbstractRunner interface, or a child of it.
 		:type runner: callable
 		:param name: the actual command
 		:type name: str
@@ -208,12 +195,12 @@ class Command(dict):
 		:type module: str|None
 		"""
 
-		super().__init__(kwargs)
+		super().__init__()
 		self._runner = runner
 		self._name = name
 		self._module = module
 
-	def _load_parameters(self):
+	def _load_dict(self):
 		"""Load parameters
 		Parses the definition of the command and compiles a list of all possible switches and the expected types.
 
@@ -224,8 +211,7 @@ class Command(dict):
 		params = {'Name': self._name}
 		if self._module is not None:
 			params['Module'] = self._module
-		cmd = PipedCommand.build_command_line('Get-Command', **params)
-		cmd = PipedCommand(cmd, output_is_object=True)
+		cmd = PipedCommand.from_components('Get-Command', **params)
 		cmd |= 'Select-Object -ExpandProperty Parameters'
 
 		result = {}
@@ -235,30 +221,12 @@ class Command(dict):
 		return result
 
 
-class Module(dict):
+class Module(LazyKeyedDict):
 	"""
 	Describes a single module in PowerShell
 	"""
 
-	def __getattr__(self, name):
-		"""Magic attribute resolution
-		Lazy calculation of certain attributes
-
-		:param name: the attribute that is not defined (yet)
-		:type name: str
-		:returns: the value for the attribute
-		:rtype: Any
-		"""
-
-		if name == 'commands':
-			value = self._load_commands()
-		else:
-			raise AttributeError(name)
-
-		self.__setattr__(name, value)
-		return value
-
-	def __init__(self, name, runner):
+	def __init__(self, runner, name):
 		"""Initialization
 		Store the module and runner callable.
 
@@ -272,101 +240,33 @@ class Module(dict):
 		self._name = name
 		self._runner = runner
 
-	def __len__(self):
-		"""Dict __len__
-		Override of the builtin dict __len__ method
-		"""
-
-		return len(self.commands)
-
-	def __missing__(self, name):
-		"""Lazy command load
-		Load the named command
-
-		:param name: the command name to load
-		:type name: str
-		:return: an instance of Command representing the named command
-		:rtype: Command
-		"""
-
-		if name not in self.commands:
-			raise KeyError(name)
-
-		return Command(self._runner, name, self._name)
-
-	def _load_commands(self):
+	def _load_keys(self):
 		"""Load commands
-		Imports the list of commands available in the module
+		Retrieves the list of commands available in the module
 
 		:return: the list of commands available in the module
 		:rtype: set
 		"""
 
-		return {result['Name'] for result in Command(self._runner, 'Get-Command', Module=self._name)()}
+		return {result['Name'] for result in PipedCommand.from_components('Get-Command', Module=self._name)(runner=self._runner)}
 
-	def items(self, *args, **kwargs):
-		"""Dict items
-		Override of the builtin dict items method
+	def _load_value(self, name):
+		"""Load value
+		Return an instance of Command representing the named command
 
-		:return: a list with the items
-		:rtype: list
+		:param name: the name of the command to load
+		:type name: str
+		:return: an instance of Command representing the named command
+		:rtype: Command
 		"""
 
-		return [(key, self[key]) for key in self.keys()]
-
-	def keys(self):
-		"""Dict keys
-		Override of the builtin dict keys method
-
-		:return: a set with the keys
-		:rtype: set
-		"""
-
-		return self.commands
-
-	def values(self):
-		"""Dict values
-		Override of the builtin dict values method
-
-		:return: a list with the values
-		:rtype: list
-		"""
-
-		return [self[key] for key in self.keys()]
+		return Command(self._runner, name, self._name)
 
 
-class Modules(dict):
+class Modules(LazyKeyedDict):
 	"""
 	Describes the list of modules available in PowerShell
 	"""
-
-	def __contains__(self, name):
-		"""Dict __contains__
-		Override of the builtin dict __contains__ method
-
-		:param name: the name of the module to look for
-		:type name: str
-		"""
-
-		return name in self.modules
-
-	def __getattr__(self, name):
-		"""Magic attribute resolution
-		Lazy calculation of certain attributes
-
-		:param name: the attribute that is not defined (yet)
-		:type name: str
-		:returns: the value for the attribute
-		:rtype: Any
-		"""
-
-		if name == 'modules':
-			value = self._load_modules()
-		else:
-			raise AttributeError(name)
-
-		self.__setattr__(name, value)
-		return value
 
 	def __init__(self, runner):
 		"""Initialization
@@ -379,22 +279,7 @@ class Modules(dict):
 		super().__init__()
 		self._runner = runner
 
-	def __missing__(self, name):
-		"""Lazy module load
-		Load the named module
-
-		:param name: the name of the module to load
-		:type name: str
-		:return: an instance of Module representing the named command
-		:rtype: Module
-		"""
-
-		if name not in self.modules:
-			raise KeyError(name)
-
-		return Module(name, self._runner)
-
-	def _load_modules(self):
+	def _load_keys(self):
 		"""Load modules
 		Imports the list of modules available to the shell
 
@@ -402,37 +287,19 @@ class Modules(dict):
 		:rtype: set
 		"""
 
-		return {result['Name'] for result in Command(self._runner, 'Get-Module', ListAvailable=None)()}
+		return {result['Name'] for result in PipedCommand.from_components('Get-Module', ListAvailable=None)(runner=self._runner)}
 
-	def items(self, *args, **kwargs):
-		"""Dict items
-		Override of the builtin dict items method
+	def _load_value(self, name):
+		"""Load value
+		Return an instance of Module representing the named module
 
-		:return: a list with the items
-		:rtype: list
+		:param name: the name of the module to load
+		:type name: str
+		:return: an instance of Module representing the named module
+		:rtype: Module
 		"""
 
-		return [(key, self[key]) for key in self.keys()]
-
-	def keys(self):
-		"""Dict keys
-		Override of the builtin dict keys method
-
-		:return: a set with the keys
-		:rtype: set
-		"""
-
-		return self.modules
-
-	def values(self):
-		"""Dict values
-		Override of the builtin dict values method
-
-		:return: a list with the values
-		:rtype: list
-		"""
-
-		return [self[key] for key in self.keys()]
+		return Module(self._runner, name)
 
 
 class PowerShell:
@@ -440,21 +307,26 @@ class PowerShell:
 	High level interface to PowerShell
 	"""
 
-	def __call__(self, command_string, input_data=None, output_is_object=True, /, **kwargs):
+	def __call__(self, command, module=None, input_data=None, output_is_object=True, /, **kwargs):
 		"""Callable magic
 		Execute the command described
 
-		:param command_string: the full string of the command to execute
-		:type command_string: str
+		:param command: the name of the command to execute
+		:type command: str
+		:param module: the name of the module containing the command
+		:type module: str
 		:param input_data: data to feed the command via pipes
 		:type input_data: str|object|None
 		:param output_is_object: selects the format of the output, True for dict, False for str
 		:type output_is_object: bool
+		:param kwargs: switches and values for the command
+		:type kwargs: Any
 		:return: the result of the command run
 		:rtype: dict|str
 		"""
 
-		return PipedCommand(initial_command_line=command_string, input_data=input_data, output_is_object=output_is_object)(self._runner, **kwargs)
+		cmd = Command(runner=self._runner, name=command, module=module)
+		return cmd(input_data, output_is_object, **kwargs)
 
 	def __getattr__(self, name):
 		"""Magic attribute resolution
@@ -478,28 +350,24 @@ class PowerShell:
 		"""Initialization
 		Store the runner callable.
 
-		:param runner: a callable similar to the with_subprocess method in signature and return format. That method is used by default.
+		:param runner: a callable similar to the .runners.AbstractRunner interface, or a child of it. Defaults to .runners.SubprocessRunner().
 		:type runner: callable|None
 		"""
 
-		self._runner = self.with_subprocess if runner is None else runner
+		self._runner = SubprocessRunner() if runner is None else runner
 
-	@staticmethod
-	def with_subprocess(command_string, /, **kwargs):
-		"""Run with subprocess
-		Use the subprocess stdlib module to execute the provided command in PowerShell. Return the stdout, stderr, and returncode.
+	def run_string(self, command_string, input_data=None, output_is_object=True):
+		"""Execute string
+		Execute the command described in the string. Similar to the call magic method but with plain string instead of structured data.
 
-		:param command_string: the command to be run
+		:param command_string: the full string of the command to execute
 		:type command_string: str
-		:param kwargs: extra parameters to pass to subprocess.run
-		:return: the stdout, stderr, and returncode
-		:rtype: tuple
+		:param input_data: data to feed the command via pipes
+		:type input_data: str|object|None
+		:param output_is_object: selects the format of the output, True for dict, False for str
+		:type output_is_object: bool
+		:return: the result of the command run
+		:rtype: dict|str
 		"""
 
-		if 'capture_output' not in kwargs:
-			kwargs['capture_output'] = True
-		if 'text' not in kwargs:
-			kwargs['text'] = True
-
-		result = subprocess_run(('powershell', '-Command', command_string), **kwargs)
-		return result.stdout, result.stderr, result.returncode
+		return PipedCommand(initial_command_line=command_string, input_data=input_data, output_is_object=output_is_object)(runner=self._runner)
