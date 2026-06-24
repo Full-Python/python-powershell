@@ -57,5 +57,5 @@ class SubprocessRunner(AbstractRunner):
 		if 'text' not in self.kwargs:
 			self.kwargs['text'] = True
 
-		result = subprocess_run(('powershell', '-Command', command_string), **self.kwargs)
+		result = subprocess_run(('pwsh', '-Command', command_string), **self.kwargs)
 		return result.stdout, result.stderr, result.returncode
