@@ -1,5 +1,5 @@
 """Some generic code
-This is some utilitary code that should probably live elsewhere.
+This is some utilitarian code that should probably live elsewhere.
 """
 
 from abc import abstractmethod
@@ -16,9 +16,24 @@ class PurePythonDict(dict):
 	ToDo: This follows the very old dicts. Extra work will have to be done to get dict views working on these.
 	"""
 
+	def __contains__(self, name):
+		"""Dict __contains__
+		Override of the builtin dict __contains__ method
+
+		:param name: the key to check for
+		:type name: Hashable
+		:return: True if contained, False otherwise
+		:rtype: bool
+		"""
+
+		return name in self.keys()
+
 	def __len__(self):
 		"""Dict __len__
 		Override of the builtin dict __len__ method
+
+		:return: the size of the dict, via keys
+		:rtype: int
 		"""
 
 		return len(self.keys())
