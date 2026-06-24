@@ -19,7 +19,7 @@ TYPE_MAP = {
 	'System.String': str,
 	'System.String[]': list,
 }
-__version__ = '0.3.0.dev7'
+__version__ = '0.3.0'
 
 
 class PipedCommand(list):
