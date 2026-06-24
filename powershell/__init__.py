@@ -211,12 +211,13 @@ class Command(LazyDict):
 		params = {'Name': self._name}
 		if self._module is not None:
 			params['Module'] = self._module
-		cmd = PipedCommand.from_components('Get-Command', **params)
-		cmd |= 'Select-Object -ExpandProperty Parameters'
+		cmd = PipedCommand.build_command_line('Get-Command', **params)
+		cmd = PipedCommand(f'({cmd}).Parameters.Values')
+		cmd |= "Select-Object Name, @{Name='Type';Expression={$_.ParameterType.FullName}}"
 
 		result = {}
-		for name, details in cmd(self._runner).items():
-			result[name] = TYPE_MAP.get(details['ParameterType']['FullName'], dict)
+		for name, type_ in cmd(self._runner):
+			result[name] = TYPE_MAP.get(type_, dict)
 
 		return result
 
@@ -248,7 +249,9 @@ class Module(LazyKeyedDict):
 		:rtype: set
 		"""
 
-		return {result['Name'] for result in PipedCommand.from_components('Get-Command', Module=self._name)(runner=self._runner)}
+		cmd = PipedCommand.from_components('Get-Command', Module=self._name)
+		cmd |= 'Select-Object -Property Name'
+		return {result['Name'] for result in cmd(runner=self._runner)}
 
 	def _load_value(self, name):
 		"""Load value
@@ -287,7 +290,9 @@ class Modules(LazyKeyedDict):
 		:rtype: set
 		"""
 
-		return {result['Name'] for result in PipedCommand.from_components('Get-Module', ListAvailable=None)(runner=self._runner)}
+		cmd = PipedCommand.from_components('Get-Module', ListAvailable=None)
+		cmd |= 'Select-Object -Property Name'
+		return {result['Name'] for result in cmd(runner=self._runner)}
 
 	def _load_value(self, name):
 		"""Load value
